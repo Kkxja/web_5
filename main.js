@@ -37,6 +37,31 @@ function send(res, status, body = '', headers = {}) {
   res.end(payload);
 }
 
+function parseCode(req) {
+  const { pathname } = new URL(req.url, 'http://localhost');  // відкидаємо ?query
+  const match = /^\/(\d{3})$/.exec(pathname);
+  return match ? match[1] : null;
+}
+
+function cacheFile(code) {
+  return path.join(CACHE_DIR, `${code}.jpg`);   // один код = один файл
+}
+
+async function handleGet(res, code) {
+  try {
+    const cached = await fs.readFile(cacheFile(code));   // байти без змін
+    return send(res, 200, cached, {
+      'Content-Type': 'image/jpeg',       // щоб браузер показав картинку, а не текст
+      'X-Image-Source': 'cache',          // заголовок звідки взято картинку
+    });
+  } catch (err) {
+    if (err.code === 'ENOENT') {          // файлу немає це не збій, а промах кешу
+      return send(res, 404, `Картинку для коду ${code} не знайдено\n`);
+    }
+    throw err;                            // інші помилки диска - потрапить у catch обробника → 500
+  }
+}
+
 // єдиний дозволений колбек, це обробник запиту, тому він async
 const server = http.createServer(async (req, res) => {
   try {
@@ -45,7 +70,19 @@ const server = http.createServer(async (req, res) => {
         Allow: ALLOWED_METHODS.join(', '),
       });
     }
-    return send(res, 501, 'Ще не реалізовано\n');
+
+    const code = parseCode(req);
+    if (!code) {
+      return send(res, 400, 'Некоректний шлях: очікується /<код з трьох цифр>, наприклад /404\n');
+    }
+
+    switch (req.method) {
+      case 'GET':
+        return await handleGet(res, code);
+      default:
+        return send(res, 501, 'Ще не реалізовано\n');
+    }
+
   } catch (err) {
     console.error('Помилка обробки запиту:', err);
     if (!res.headersSent) send(res, 500, 'Внутрішня помилка сервера\n');
