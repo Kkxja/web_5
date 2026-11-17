@@ -17,5 +17,8 @@
   "bugs": {
     "url": "https://github.com/Kkxja/web_5/issues"
   },
-  "homepage": "https://github.com/Kkxja/web_5#readme"
+  "homepage": "https://github.com/Kkxja/web_5#readme",
+  "dependencies": {
+    "commander": "^15.1.0"
+  }
 }
