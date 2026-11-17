@@ -5,6 +5,7 @@ const fs = require('node:fs/promises');   // лише promise-версія fs
 const path = require('node:path');
 const { once } = require('node:events'); 
 const { program, InvalidArgumentError } = require('commander');
+const superagent = require('superagent');
 
 function parsePort(value) {
   const port = Number(value);
@@ -47,19 +48,58 @@ function cacheFile(code) {
   return path.join(CACHE_DIR, `${code}.jpg`);   // один код = один файл
 }
 
-async function handleGet(res, code) {
+// rename атомарний, тому інші запити бачать або старий файл, або повний новий
+async function writeCache(code, data) {
+  const target = cacheFile(code);
+  const tmp = `${target}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
-    const cached = await fs.readFile(cacheFile(code));   // байти без змін
-    return send(res, 200, cached, {
-      'Content-Type': 'image/jpeg',       // щоб браузер показав картинку, а не текст
-      'X-Image-Source': 'cache',          // заголовок звідки взято картинку
-    });
+    await fs.writeFile(tmp, data);
+    await fs.rename(tmp, target);
   } catch (err) {
-    if (err.code === 'ENOENT') {          // файлу немає це не збій, а промах кешу
-      return send(res, 404, `Картинку для коду ${code} не знайдено\n`);
-    }
-    throw err;                            // інші помилки диска - потрапить у catch обробника → 500
+    await fs.unlink(tmp).catch(() => {});   // прибираємо тимчасовий файл при збої
+    throw err;
   }
+}
+
+// Повертає Buffer з картинкою або null при помилці
+async function fetchFromHttpCat(code) {
+  try {
+    const response = await superagent
+      .get(`https://http.cat/${code}`)
+      .buffer(true)
+      .parse(superagent.parse.image)                   // тіло відповіді як Buffer, без змін
+      .timeout({ response: 5000, deadline: 10000 });   // щоб запит не висів вічно
+
+    const type = response.headers['content-type'] || '';
+    if (!type.startsWith('image/') || !Buffer.isBuffer(response.body) || response.body.length === 0) {
+      return null;                                     // прийшло не зображення
+    }
+    return response.body;
+  } catch (err) {
+    // superagent відхиляє проміс на 4xx/5xx (є err.status), на мережевих помилках і таймаутах
+    return null;
+  }
+}
+
+async function handleGet(res, code) {
+    try {
+    const cached = await fs.readFile(cacheFile(code));
+    return send(res, 200, cached, { 'Content-Type': 'image/jpeg', 'X-Image-Source': 'cache' });
+    }
+    catch (err) {
+    if (err.code !== 'ENOENT') throw err;    // ENOENT пропускаємо далі - це промах кешу
+    }
+
+    const image = await fetchFromHttpCat(code);
+    if (!image) {
+        return send(res, 404, `Картинку для коду ${code} не знайдено\n`);  // у кеш нічого не пишемо
+    }
+
+    await writeCache(code, image);             // зберігаємо в кеш
+    return send(res, 200, image, {             // віддаємо клієнтові
+        'Content-Type': 'image/jpeg',
+        'X-Image-Source': 'http.cat',
+    });
 }
 
 // єдиний дозволений колбек, це обробник запиту, тому він async
