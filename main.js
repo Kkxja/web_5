@@ -48,6 +48,14 @@ function cacheFile(code) {
   return path.join(CACHE_DIR, `${code}.jpg`);   // один код = один файл
 }
 
+async function readBody(req) {
+  const chunks = [];
+  for await (const chunk of req) {
+    chunks.push(chunk);                // шматки приходять як Buffer
+  }
+  return Buffer.concat(chunks);        // склеюємо в один Buffer, байти не змінюються
+}
+
 // rename атомарний, тому інші запити бачать або старий файл, або повний новий
 async function writeCache(code, data) {
   const target = cacheFile(code);
@@ -102,6 +110,15 @@ async function handleGet(res, code) {
     });
 }
 
+async function handlePut(req, res, code) {
+  const body = await readBody(req);
+  if (body.length === 0) {
+    return send(res, 400, 'Тіло запиту порожнє: очікується двійкове зображення\n');
+  }
+  await writeCache(code, body);        // записує нову або замінює наявну картинку
+  return send(res, 201, `Картинку для коду ${code} збережено в кеш\n`);
+}
+
 // єдиний дозволений колбек, це обробник запиту, тому він async
 const server = http.createServer(async (req, res) => {
   try {
@@ -117,10 +134,12 @@ const server = http.createServer(async (req, res) => {
     }
 
     switch (req.method) {
-      case 'GET':
-        return await handleGet(res, code);
-      default:
-        return send(res, 501, 'Ще не реалізовано\n');
+        case 'GET':
+            return await handleGet(res, code);
+        case 'PUT':
+            return await handlePut(req, res, code);
+         default:
+            return send(res, 501, 'Ще не реалізовано\n');
     }
 
   } catch (err) {
