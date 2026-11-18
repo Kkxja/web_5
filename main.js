@@ -119,6 +119,18 @@ async function handlePut(req, res, code) {
   return send(res, 201, `Картинку для коду ${code} збережено в кеш\n`);
 }
 
+async function handleDelete(res, code) {
+  try {
+    await fs.unlink(cacheFile(code));          // видалення файлу
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return send(res, 404, `Картинки для коду ${code} немає в кеші\n`);
+    }
+    throw err;                                 // інше 500
+  }
+  return send(res, 200, `Картинку для коду ${code} видалено з кешу\n`);
+}
+
 // єдиний дозволений колбек, це обробник запиту, тому він async
 const server = http.createServer(async (req, res) => {
   try {
@@ -138,8 +150,8 @@ const server = http.createServer(async (req, res) => {
             return await handleGet(res, code);
         case 'PUT':
             return await handlePut(req, res, code);
-         default:
-            return send(res, 501, 'Ще не реалізовано\n');
+        case 'DELETE':
+            return await handleDelete(res, code);
     }
 
   } catch (err) {
